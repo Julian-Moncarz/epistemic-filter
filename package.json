@@ -1,0 +1,19 @@
+{
+  "name": "fact-whisper",
+  "version": "0.1.0",
+  "description": "Real-time factual claim detection and correction during phone calls",
+  "main": "src/server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "@deepgram/sdk": "^3.9.0",
+    "@elevenlabs/elevenlabs-js": "^2.34.0",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "ws": "^8.18.0"
+  }
+}
