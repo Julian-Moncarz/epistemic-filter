@@ -41,7 +41,8 @@ app.use(express.urlencoded({ extended: true }));
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
 // TwiML webhook routes
-const wsUrl = `wss://${process.env.HOST || 'localhost'}:${PORT}/media`;
+const host = process.env.HOST || `localhost:${PORT}`;
+const wsUrl = `wss://${host}/media`;
 app.use('/twilio', createTwimlRouter(wsUrl));
 
 // HTTP server
