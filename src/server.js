@@ -4,23 +4,22 @@ import express from 'express';
 import { WebSocketServer } from 'ws';
 import http from 'http';
 
-import { createTexmlRouter, parseTelnyxMessage, sendAudioToTelnyx } from './telnyx.js';
+import { createTwimlRouter, parseTwilioMessage, sendAudioToTwilio } from './twilio.js';
 import { createDeepgramStream } from './deepgram.js';
 import { ClaimProcessor } from './claims.js';
 import { WhisperTTS } from './tts.js';
-import { convertToTelnyxAudio, attenuateAudio } from './audio.js';
-import { decodeMuLaw } from './audio.js';
+import { convertToTelephonyAudio, attenuateAudio } from './audio.js';
 
 const PORT = process.env.PORT || 8080;
 
 // Validate required env vars
 const required = [
-  'TELNYX_API_KEY',
+  'TWILIO_ACCOUNT_SID',
+  'TWILIO_AUTH_TOKEN',
   'DEEPGRAM_API_KEY',
   'ANTHROPIC_API_KEY',
   'ELEVENLABS_API_KEY',
   'ELEVENLABS_VOICE_ID',
-  'BRAVE_API_KEY',
 ];
 for (const key of required) {
   if (!process.env[key]) {
@@ -30,10 +29,10 @@ for (const key of required) {
 }
 
 // Initialize services
-const claims = new ClaimProcessor(process.env.ANTHROPIC_API_KEY, process.env.BRAVE_API_KEY);
+const claims = new ClaimProcessor(process.env.ANTHROPIC_API_KEY);
 const tts = new WhisperTTS(process.env.ELEVENLABS_API_KEY, process.env.ELEVENLABS_VOICE_ID);
 
-// Express app for TeXML webhooks
+// Express app for TwiML webhooks
 const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -41,14 +40,14 @@ app.use(express.urlencoded({ extended: true }));
 // Health check
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
-// TeXML webhook routes
+// TwiML webhook routes
 const wsUrl = `wss://${process.env.HOST || 'localhost'}:${PORT}/media`;
-app.use('/telnyx', createTexmlRouter(wsUrl));
+app.use('/twilio', createTwimlRouter(wsUrl));
 
 // HTTP server
 const server = http.createServer(app);
 
-// WebSocket server for Telnyx media streams
+// WebSocket server for Twilio media streams
 const wss = new WebSocketServer({ server, path: '/media' });
 
 wss.on('connection', (ws) => {
@@ -65,7 +64,7 @@ wss.on('connection', (ws) => {
   const recentClaims = new Set();
   const CLAIM_COOLDOWN_MS = 60_000;
 
-  // Set up Deepgram STT
+  // Set up Deepgram STT — configured for μ-law 8kHz (Twilio's native format)
   deepgram = createDeepgramStream(process.env.DEEPGRAM_API_KEY, async (result) => {
     if (!result.isFinal) return;
 
@@ -96,7 +95,7 @@ wss.on('connection', (ws) => {
       recentClaims.add(claim);
       setTimeout(() => recentClaims.delete(claim), CLAIM_COOLDOWN_MS);
 
-      // Stage 2: Verify with Sonnet + web search
+      // Stage 2: Verify with Haiku + Anthropic web search
       const correction = await claims.verifyClaim(claim);
 
       if (!correction) return;
@@ -114,22 +113,22 @@ wss.on('connection', (ws) => {
     const result = await tts.synthesize(text);
     if (!result) return;
 
-    // Convert PCM to μ-law 8kHz for Telnyx
-    const mulawAudio = convertToTelnyxAudio(result.pcmBuffer, result.sampleRate);
+    // Convert PCM to μ-law 8kHz for Twilio
+    const mulawAudio = convertToTelephonyAudio(result.pcmBuffer, result.sampleRate);
 
     // Attenuate for a subtle whisper effect
     const whisperAudio = attenuateAudio(mulawAudio, 0.5);
 
-    // Send back through the Telnyx WebSocket
+    // Send back through the Twilio WebSocket
     if (ws.readyState === ws.OPEN && sid) {
-      sendAudioToTelnyx(ws, whisperAudio, sid);
+      sendAudioToTwilio(ws, whisperAudio, sid);
       console.log(`[server] sent ${whisperAudio.length} bytes of correction audio`);
     }
   }
 
-  // Handle messages from Telnyx WebSocket
+  // Handle messages from Twilio WebSocket
   ws.on('message', (message) => {
-    const parsed = parseTelnyxMessage(message.toString());
+    const parsed = parseTwilioMessage(message.toString());
 
     switch (parsed.type) {
       case 'connected':
@@ -141,10 +140,8 @@ wss.on('connection', (ws) => {
 
       case 'media':
         if (!streamSid) streamSid = parsed.streamSid;
-        // Telnyx streams G.722 or μ-law audio; decode to PCM for Deepgram
-        // Deepgram expects linear16, so decode μ-law → PCM
-        const pcm = decodeMuLaw(parsed.audio);
-        deepgram?.send(pcm);
+        // Twilio streams μ-law 8kHz — send directly to Deepgram (configured for mulaw)
+        deepgram?.send(parsed.audio);
         break;
 
       case 'stop':
@@ -166,6 +163,6 @@ wss.on('connection', (ws) => {
 
 server.listen(PORT, () => {
   console.log(`[server] Fact-Whisper running on port ${PORT}`);
-  console.log(`[server] TeXML webhook: POST /telnyx/inbound`);
+  console.log(`[server] TwiML webhook: POST /twilio/inbound`);
   console.log(`[server] Media WebSocket: ws://localhost:${PORT}/media`);
 });

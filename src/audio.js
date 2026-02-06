@@ -82,7 +82,7 @@ export function resampleLinear(pcmBuffer, sourceRate, targetRate) {
 
 // Convert ElevenLabs PCM output (typically 22050Hz or 24000Hz, 16-bit mono)
 // to Telnyx-compatible μ-law 8kHz
-export function convertToTelnyxAudio(pcmBuffer, sourceRate = 22050) {
+export function convertToTelephonyAudio(pcmBuffer, sourceRate = 22050) {
   const resampled = resampleLinear(pcmBuffer, sourceRate, 8000);
   return encodeMuLaw(resampled);
 }

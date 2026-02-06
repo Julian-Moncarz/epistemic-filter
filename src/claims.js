@@ -20,12 +20,13 @@ NONE
 
 Do NOT explain your reasoning. Just output CLAIM: or NONE.`;
 
-const VERIFICATION_PROMPT = `You are a real-time fact checker. You will receive a factual claim extracted from a live conversation.
+const VERIFICATION_PROMPT = `You are a real-time fact checker. You will receive a factual claim extracted from a live conversation. Latency matters — the user is in a live call.
 
 Your job:
-1. Use the web search tool to verify the claim
-2. Determine if the claim is FALSE or MISLEADING
-3. If false, provide a brief, natural-sounding correction
+1. If you are VERY confident you know the correct answer, respond immediately WITHOUT searching.
+2. If you are unsure or the claim involves specific numbers, dates, or recent events, use the web search tool first.
+3. Determine if the claim is FALSE or MISLEADING.
+4. If false, provide a brief, natural-sounding correction.
 
 IMPORTANT:
 - Only flag claims that are clearly wrong. If the claim is approximately correct or debatable, respond with CORRECT.
@@ -38,9 +39,8 @@ or
 CORRECTION: <brief correction>`;
 
 export class ClaimProcessor {
-  constructor(anthropicKey, braveApiKey) {
+  constructor(anthropicKey) {
     this.client = new Anthropic({ apiKey: anthropicKey });
-    this.braveApiKey = braveApiKey;
     this.pendingVerifications = new Set();
   }
 
@@ -72,28 +72,35 @@ export class ClaimProcessor {
     }
   }
 
-  // Stage 2: Sonnet verification with web search
+  // Stage 2: Haiku verification with Anthropic built-in web search
   async verifyClaim(claim) {
-    // Deduplicate concurrent verification of the same claim
     if (this.pendingVerifications.has(claim)) return null;
     this.pendingVerifications.add(claim);
 
     try {
-      const searchResults = await this.webSearch(claim);
-
       const response = await this.client.messages.create({
-        model: 'claude-sonnet-4-5-20250929',
-        max_tokens: 200,
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 300,
+        tools: [
+          {
+            type: 'web_search_20250305',
+            name: 'web_search',
+            max_uses: 3,
+          },
+        ],
         messages: [
           {
             role: 'user',
-            content: `Claim to verify: "${claim}"\n\nWeb search results:\n${searchResults}`,
+            content: `Claim to verify: "${claim}"`,
           },
         ],
         system: VERIFICATION_PROMPT,
       });
 
-      const text = response.content[0]?.text?.trim() || '';
+      // Concatenate all text blocks (Haiku may split across multiple blocks after web search)
+      const textBlocks = response.content.filter((b) => b.type === 'text');
+      const text = textBlocks.map((b) => b.text).join('').trim();
+
       if (text.startsWith('CORRECTION:')) {
         const correction = text.slice(11).trim();
         console.log(`[claims] correction: "${correction}"`);
@@ -107,35 +114,6 @@ export class ClaimProcessor {
       return null;
     } finally {
       this.pendingVerifications.delete(claim);
-    }
-  }
-
-  // Brave Search API
-  async webSearch(query) {
-    try {
-      const url = `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=5`;
-      const res = await fetch(url, {
-        headers: {
-          Accept: 'application/json',
-          'X-Subscription-Token': this.braveApiKey,
-        },
-      });
-
-      if (!res.ok) {
-        console.error(`[search] brave returned ${res.status}`);
-        return 'Search failed - no results available.';
-      }
-
-      const data = await res.json();
-      const results = data.web?.results || [];
-
-      return results
-        .slice(0, 5)
-        .map((r, i) => `[${i + 1}] ${r.title}\n${r.description}`)
-        .join('\n\n') || 'No relevant results found.';
-    } catch (err) {
-      console.error('[search] error:', err.message);
-      return 'Search failed - no results available.';
     }
   }
 }

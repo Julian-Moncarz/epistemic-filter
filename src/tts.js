@@ -11,17 +11,17 @@ export class WhisperTTS {
   // ElevenLabs streaming returns chunks; we concatenate them
   async synthesize(text) {
     try {
-      const audioStream = await this.client.textToSpeech.convertAsStream(
+      const audioStream = await this.client.textToSpeech.stream(
         this.voiceId,
         {
           text,
-          model_id: 'eleven_turbo_v2_5',
-          output_format: 'pcm_22050',
-          voice_settings: {
+          modelId: 'eleven_turbo_v2_5',
+          outputFormat: 'pcm_22050',
+          voiceSettings: {
             stability: 0.7,
-            similarity_boost: 0.8,
+            similarityBoost: 0.8,
             style: 0.0,
-            use_speaker_boost: false,
+            useSpeakerBoost: false,
           },
         }
       );
