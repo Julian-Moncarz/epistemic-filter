@@ -1,9 +1,18 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import crypto from 'crypto';
 import http from 'http';
 import express from 'express';
 import { WebSocketServer, WebSocket } from 'ws';
 import { createTwimlRouter, parseTwilioMessage, sendAudioToTwilio } from '../src/twilio.js';
 import { encodeMuLaw, decodeMuLaw, convertToTelephonyAudio, attenuateAudio } from '../src/audio.js';
+
+const TEST_AUTH_TOKEN = 'test-auth-token-abc123';
+
+function twilioSignature(url, params = {}) {
+  const sortedKeys = Object.keys(params).sort();
+  const data = url + sortedKeys.map((k) => k + params[k]).join('');
+  return crypto.createHmac('sha1', TEST_AUTH_TOKEN).update(Buffer.from(data, 'utf-8')).digest('base64');
+}
 
 describe('integration: Twilio WebSocket ↔ audio pipeline', () => {
   let server;
@@ -13,7 +22,7 @@ describe('integration: Twilio WebSocket ↔ audio pipeline', () => {
   beforeEach(async () => {
     const app = express();
     app.use(express.json());
-    app.use('/twilio', createTwimlRouter('wss://localhost/media'));
+    app.use('/twilio', createTwimlRouter('wss://localhost/media', TEST_AUTH_TOKEN));
 
     server = http.createServer(app);
     wss = new WebSocketServer({ server, path: '/media' });
@@ -109,8 +118,11 @@ describe('integration: Twilio WebSocket ↔ audio pipeline', () => {
   });
 
   it('TwiML inbound endpoint returns correct XML', async () => {
-    const res = await fetch(`http://localhost:${port}/twilio/inbound`, {
+    const url = `http://localhost:${port}/twilio/inbound`;
+    const sig = twilioSignature(url);
+    const res = await fetch(url, {
       method: 'POST',
+      headers: { 'X-Twilio-Signature': sig },
     });
 
     const body = await res.text();

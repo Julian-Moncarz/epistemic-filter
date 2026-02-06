@@ -1,7 +1,16 @@
 import { describe, it, expect, vi } from 'vitest';
+import crypto from 'crypto';
 import express from 'express';
 import http from 'http';
 import { createTwimlRouter, parseTwilioMessage, sendAudioToTwilio } from '../src/twilio.js';
+
+const TEST_AUTH_TOKEN = 'test-auth-token-abc123';
+
+function twilioSignature(url, params = {}) {
+  const sortedKeys = Object.keys(params).sort();
+  const data = url + sortedKeys.map((k) => k + params[k]).join('');
+  return crypto.createHmac('sha1', TEST_AUTH_TOKEN).update(Buffer.from(data, 'utf-8')).digest('base64');
+}
 
 describe('parseTwilioMessage', () => {
   it('parses a media event with base64 audio', () => {
@@ -164,10 +173,15 @@ describe('createTwimlRouter', () => {
   }
 
   it('responds with valid TwiML on POST /inbound', async () => {
-    const router = createTwimlRouter('wss://example.com/media');
+    const router = createTwimlRouter('wss://example.com/media', TEST_AUTH_TOKEN);
     const base = await startServer(router);
 
-    const res = await fetch(`${base}/twilio/inbound`, { method: 'POST' });
+    const url = `${base}/twilio/inbound`;
+    const sig = twilioSignature(url);
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'X-Twilio-Signature': sig },
+    });
     expect(res.status).toBe(200);
     expect(res.headers.get('content-type')).toContain('xml');
 
@@ -181,14 +195,43 @@ describe('createTwimlRouter', () => {
     server.close();
   });
 
-  it('responds 200 on POST /status', async () => {
-    const router = createTwimlRouter('wss://example.com/media');
+  it('rejects requests without Twilio signature', async () => {
+    const router = createTwimlRouter('wss://example.com/media', TEST_AUTH_TOKEN);
     const base = await startServer(router);
 
-    const res = await fetch(`${base}/twilio/status`, {
+    const res = await fetch(`${base}/twilio/inbound`, { method: 'POST' });
+    expect(res.status).toBe(403);
+
+    server.close();
+  });
+
+  it('rejects requests with invalid Twilio signature', async () => {
+    const router = createTwimlRouter('wss://example.com/media', TEST_AUTH_TOKEN);
+    const base = await startServer(router);
+
+    const res = await fetch(`${base}/twilio/inbound`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ CallStatus: 'completed' }),
+      headers: { 'X-Twilio-Signature': 'bad-signature' },
+    });
+    expect(res.status).toBe(403);
+
+    server.close();
+  });
+
+  it('responds 200 on POST /status', async () => {
+    const router = createTwimlRouter('wss://example.com/media', TEST_AUTH_TOKEN);
+    const base = await startServer(router);
+
+    const params = { CallStatus: 'completed' };
+    const url = `${base}/twilio/status`;
+    const sig = twilioSignature(url, params);
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Twilio-Signature': sig,
+      },
+      body: JSON.stringify(params),
     });
     expect(res.status).toBe(200);
 
@@ -197,10 +240,15 @@ describe('createTwimlRouter', () => {
 
   it('embeds the correct websocket URL in TwiML', async () => {
     const wsUrl = 'wss://my-server.com:8080/media';
-    const router = createTwimlRouter(wsUrl);
+    const router = createTwimlRouter(wsUrl, TEST_AUTH_TOKEN);
     const base = await startServer(router);
 
-    const res = await fetch(`${base}/twilio/inbound`, { method: 'POST' });
+    const url = `${base}/twilio/inbound`;
+    const sig = twilioSignature(url);
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'X-Twilio-Signature': sig },
+    });
     const body = await res.text();
     expect(body).toContain(`url="${wsUrl}"`);
 
