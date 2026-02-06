@@ -3,12 +3,14 @@ import 'dotenv/config';
 import express from 'express';
 import { WebSocketServer } from 'ws';
 import http from 'http';
+import crypto from 'crypto';
 
 import { createTwimlRouter, parseTwilioMessage, sendAudioToTwilio } from './twilio.js';
 import { createDeepgramStream } from './deepgram.js';
 import { ClaimProcessor } from './claims.js';
 import { WhisperTTS } from './tts.js';
 import { convertToTelephonyAudio, attenuateAudio } from './audio.js';
+import { CostTracker } from './costs.js';
 
 const PORT = process.env.PORT || 8080;
 
@@ -30,8 +32,9 @@ for (const key of required) {
 }
 
 // Initialize services
-const claims = new ClaimProcessor(process.env.ANTHROPIC_API_KEY);
-const tts = new WhisperTTS(process.env.ELEVENLABS_API_KEY, process.env.ELEVENLABS_VOICE_ID);
+const tracker = new CostTracker();
+const claims = new ClaimProcessor(process.env.ANTHROPIC_API_KEY, tracker);
+const tts = new WhisperTTS(process.env.ELEVENLABS_API_KEY, process.env.ELEVENLABS_VOICE_ID, tracker);
 
 // Express app for TwiML webhooks
 const app = express();
@@ -41,10 +44,20 @@ app.use(express.urlencoded({ extended: true }));
 // Health check
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
+// Cost tracking endpoint
+app.get('/costs', (req, res) => {
+  const since = req.query.since || null;
+  const limit = parseInt(req.query.limit, 10) || 20;
+  res.json({
+    summary: tracker.summary(since),
+    recent: tracker.recent(limit),
+  });
+});
+
 // TwiML webhook routes
 const host = process.env.HOST || `localhost:${PORT}`;
 const wsUrl = `wss://${host}/media?token=${process.env.MEDIA_SECRET}`;
-app.use('/twilio', createTwimlRouter(wsUrl));
+app.use('/twilio', createTwimlRouter(wsUrl, process.env.TWILIO_AUTH_TOKEN, tracker));
 
 // HTTP server
 const server = http.createServer(app);
@@ -61,6 +74,12 @@ wss.on('connection', (ws, req) => {
   }
 
   console.log('[server] new media stream connection');
+
+  const callId = crypto.randomUUID();
+
+  // Set callId on claims and tts so cost entries are grouped
+  claims._callId = callId;
+  tts._callId = callId;
 
   let streamSid = null;
   let deepgram = null;
@@ -90,7 +109,7 @@ wss.on('connection', (ws, req) => {
 
     // Stage 1: Claim detection with Haiku (async, non-blocking)
     processClaim(segment, ws, streamSid);
-  });
+  }, tracker, callId);
 
   async function processClaim(segment, ws, sid) {
     try {
@@ -173,5 +192,6 @@ wss.on('connection', (ws, req) => {
 server.listen(PORT, () => {
   console.log(`[server] Fact-Whisper running on port ${PORT}`);
   console.log(`[server] TwiML webhook: POST /twilio/inbound`);
+  console.log(`[server] Cost tracker: GET /costs`);
   console.log(`[server] Media WebSocket: ws://localhost:${PORT}/media`);
 });

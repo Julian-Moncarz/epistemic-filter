@@ -14,6 +14,7 @@
     "@anthropic-ai/sdk": "^0.39.0",
     "@deepgram/sdk": "^3.9.0",
     "@elevenlabs/elevenlabs-js": "^2.34.0",
+    "better-sqlite3": "^12.6.2",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "ws": "^8.18.0"

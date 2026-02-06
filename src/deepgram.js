@@ -1,7 +1,8 @@
 // Deepgram streaming STT integration
 import { createClient } from '@deepgram/sdk';
+import { deepgramCost } from './costs.js';
 
-export function createDeepgramStream(apiKey, onTranscript) {
+export function createDeepgramStream(apiKey, onTranscript, costTracker = null, callId = null) {
   const deepgram = createClient(apiKey);
 
   const connection = deepgram.listen.live({
@@ -16,8 +17,11 @@ export function createDeepgramStream(apiKey, onTranscript) {
     channels: 1,
   });
 
+  let openedAt = null;
+
   connection.on('open', () => {
     console.log('[deepgram] connection opened');
+    openedAt = Date.now();
   });
 
   connection.on('Results', (data) => {
@@ -40,6 +44,10 @@ export function createDeepgramStream(apiKey, onTranscript) {
 
   connection.on('close', () => {
     console.log('[deepgram] connection closed');
+    if (costTracker && openedAt) {
+      const seconds = (Date.now() - openedAt) / 1000;
+      costTracker.log('deepgram', 'stt', seconds, 'seconds', deepgramCost(seconds), callId);
+    }
   });
 
   return {

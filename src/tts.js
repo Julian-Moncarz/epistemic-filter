@@ -1,10 +1,12 @@
 // ElevenLabs streaming TTS integration
 import { ElevenLabsClient } from '@elevenlabs/elevenlabs-js';
+import { elevenlabsCost } from './costs.js';
 
 export class WhisperTTS {
-  constructor(apiKey, voiceId) {
+  constructor(apiKey, voiceId, costTracker = null) {
     this.client = new ElevenLabsClient({ apiKey });
     this.voiceId = voiceId;
+    this.costTracker = costTracker;
   }
 
   // Generate TTS audio and return as a single PCM buffer
@@ -33,6 +35,11 @@ export class WhisperTTS {
 
       const pcmBuffer = Buffer.concat(chunks);
       console.log(`[tts] synthesized ${text.length} chars → ${pcmBuffer.length} bytes PCM`);
+
+      if (this.costTracker) {
+        this.costTracker.log('elevenlabs', 'tts', text.length, 'characters', elevenlabsCost(text.length), this._callId);
+      }
+
       return { pcmBuffer, sampleRate: 22050 };
     } catch (err) {
       console.error('[tts] error:', err.message);

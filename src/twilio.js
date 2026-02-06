@@ -1,9 +1,46 @@
 // Twilio TwiML handler and WebSocket audio bridge
 import express from 'express';
+import crypto from 'crypto';
+import { twilioCost } from './costs.js';
+
+// Validate X-Twilio-Signature to ensure requests originate from Twilio
+function validateTwilioSignature(authToken) {
+  return (req, res, next) => {
+    const signature = req.headers['x-twilio-signature'];
+    if (!signature) {
+      console.warn('[twilio] rejected: missing X-Twilio-Signature');
+      return res.sendStatus(403);
+    }
+
+    // Reconstruct the full URL Twilio signed against
+    const protocol = req.headers['x-forwarded-proto'] || req.protocol;
+    const url = `${protocol}://${req.headers.host}${req.originalUrl}`;
+
+    // Sort POST params and append key=value pairs to URL
+    const params = req.body || {};
+    const sortedKeys = Object.keys(params).sort();
+    const data = url + sortedKeys.map((k) => k + params[k]).join('');
+
+    const expected = crypto
+      .createHmac('sha1', authToken)
+      .update(Buffer.from(data, 'utf-8'))
+      .digest('base64');
+
+    if (signature !== expected) {
+      console.warn('[twilio] rejected: invalid signature');
+      return res.sendStatus(403);
+    }
+
+    next();
+  };
+}
 
 // TwiML response for incoming calls — opens a bidirectional media stream
-export function createTwimlRouter(wsUrl) {
+export function createTwimlRouter(wsUrl, authToken, costTracker = null) {
   const router = express.Router();
+
+  // All routes require valid Twilio signature
+  router.use(validateTwilioSignature(authToken));
 
   // Twilio sends a webhook when a call comes in; respond with TwiML
   router.post('/inbound', (req, res) => {
@@ -22,6 +59,14 @@ export function createTwimlRouter(wsUrl) {
   // Status callback
   router.post('/status', (req, res) => {
     console.log('[twilio] status:', req.body?.CallStatus || 'unknown');
+
+    if (costTracker && req.body?.CallDuration) {
+      const seconds = parseInt(req.body.CallDuration, 10);
+      if (seconds > 0) {
+        costTracker.log('twilio', 'call', seconds, 'seconds', twilioCost(seconds), req.body.CallSid);
+      }
+    }
+
     res.sendStatus(200);
   });
 

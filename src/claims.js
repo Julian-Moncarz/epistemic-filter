@@ -1,5 +1,6 @@
 // Two-stage claim detection and verification using Claude
 import Anthropic from '@anthropic-ai/sdk';
+import { anthropicCost } from './costs.js';
 
 const CLAIM_DETECTION_PROMPT = `You are a factual claim detector monitoring a live conversation transcript.
 
@@ -40,8 +41,9 @@ or
 CORRECTION: <brief correction>`;
 
 export class ClaimProcessor {
-  constructor(anthropicKey) {
+  constructor(anthropicKey, costTracker = null) {
     this.client = new Anthropic({ apiKey: anthropicKey });
+    this.costTracker = costTracker;
     this.pendingVerifications = new Set();
   }
 
@@ -59,6 +61,12 @@ export class ClaimProcessor {
         ],
         system: CLAIM_DETECTION_PROMPT,
       });
+
+      if (this.costTracker && response.usage) {
+        const cost = anthropicCost(response.usage);
+        this.costTracker.log('anthropic', 'detect_claim', response.usage.input_tokens, 'input_tokens', cost.input, this._callId);
+        this.costTracker.log('anthropic', 'detect_claim', response.usage.output_tokens, 'output_tokens', cost.output, this._callId);
+      }
 
       const text = response.content[0]?.text?.trim() || '';
       if (text.startsWith('CLAIM:')) {
@@ -97,6 +105,12 @@ export class ClaimProcessor {
         ],
         system: VERIFICATION_PROMPT,
       });
+
+      if (this.costTracker && response.usage) {
+        const cost = anthropicCost(response.usage);
+        this.costTracker.log('anthropic', 'verify_claim', response.usage.input_tokens, 'input_tokens', cost.input, this._callId, { claim, web_search: true });
+        this.costTracker.log('anthropic', 'verify_claim', response.usage.output_tokens, 'output_tokens', cost.output, this._callId, { claim, web_search: true });
+      }
 
       // Concatenate all text blocks (Haiku may split across multiple blocks after web search)
       const textBlocks = response.content.filter((b) => b.type === 'text');
