@@ -20,6 +20,7 @@ const required = [
   'ANTHROPIC_API_KEY',
   'ELEVENLABS_API_KEY',
   'ELEVENLABS_VOICE_ID',
+  'MEDIA_SECRET',
 ];
 for (const key of required) {
   if (!process.env[key]) {
@@ -42,7 +43,7 @@ app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
 // TwiML webhook routes
 const host = process.env.HOST || `localhost:${PORT}`;
-const wsUrl = `wss://${host}/media`;
+const wsUrl = `wss://${host}/media?token=${process.env.MEDIA_SECRET}`;
 app.use('/twilio', createTwimlRouter(wsUrl));
 
 // HTTP server
@@ -51,7 +52,14 @@ const server = http.createServer(app);
 // WebSocket server for Twilio media streams
 const wss = new WebSocketServer({ server, path: '/media' });
 
-wss.on('connection', (ws) => {
+wss.on('connection', (ws, req) => {
+  const url = new URL(req.url, `http://${req.headers.host}`);
+  if (url.searchParams.get('token') !== process.env.MEDIA_SECRET) {
+    console.warn('[server] rejected WebSocket connection: invalid token');
+    ws.close(1008, 'Unauthorized');
+    return;
+  }
+
   console.log('[server] new media stream connection');
 
   let streamSid = null;
